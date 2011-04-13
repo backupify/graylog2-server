@@ -20,17 +20,20 @@
 
 package org.graylog2.messagehandlers.gelf;
 
-import java.io.IOException;
-import java.io.UnsupportedEncodingException;
-import java.net.DatagramPacket;
-import java.util.zip.DataFormatException;
-import org.graylog2.Log;
+import org.apache.log4j.Logger;
 import org.graylog2.Tools;
+import org.graylog2.blacklists.Blacklist;
 import org.graylog2.database.MongoBridge;
+import org.graylog2.forwarders.Forwarder;
 import org.graylog2.messagehandlers.common.HostUpsertHook;
 import org.graylog2.messagehandlers.common.MessageCounterHook;
 import org.graylog2.messagehandlers.common.MessageParserHook;
 import org.graylog2.messagehandlers.common.ReceiveHookManager;
+
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.net.DatagramPacket;
+import java.util.zip.DataFormatException;
 
 /**
  * GELFClient.java: Jun 23, 2010 7:15:12 PM
@@ -40,6 +43,8 @@ import org.graylog2.messagehandlers.common.ReceiveHookManager;
  * @author: Lennart Koopmann <lennart@socketfeed.com>
  */
 public class SimpleGELFClientHandler extends GELFClientHandlerBase implements GELFClientHandlerIF {
+
+    private static final Logger LOG = Logger.getLogger(SimpleGELFClientHandler.class);
 
     private String amqpReceiverQueue = null;
 
@@ -59,17 +64,19 @@ public class SimpleGELFClientHandler extends GELFClientHandlerBase implements GE
             // Determine compression type.
             int type = GELF.getGELFType(msg.getData());
 
+            this.message.setRaw(msg.getData());
+
             // Decompress.
             switch (type) {
                 // Decompress ZLIB
                 case GELF.TYPE_ZLIB:
-                    Log.info("Handling ZLIB compressed SimpleGELFClient");
+                    LOG.info("Handling ZLIB compressed SimpleGELFClient");
                     this.clientMessage = Tools.decompressZlib(msg.getData());
                     break;
 
                 // Decompress GZIP
                 case GELF.TYPE_GZIP:
-                    Log.info("Handling GZIP compressed SimpleGELFClient");
+                    LOG.info("Handling GZIP compressed SimpleGELFClient");
                     this.clientMessage = Tools.decompressGzip(msg.getData());
                     break;
 
@@ -80,7 +87,7 @@ public class SimpleGELFClientHandler extends GELFClientHandlerBase implements GE
         } else if(clientMessage instanceof String) {
             this.clientMessage = (String) clientMessage;
         } else if(clientMessage instanceof GELFMessage) {
-        	this.message = (GELFMessage) clientMessage;
+            this.message = (GELFMessage) clientMessage;
         }
         
     }
@@ -92,22 +99,27 @@ public class SimpleGELFClientHandler extends GELFClientHandlerBase implements GE
      */
     public boolean handle() {
         try {
-             // Fills properties with values from JSON.
-        	if(this.clientMessage instanceof String) {
-	            try { this.parse(); } catch(Exception e) {
-	                Log.warn("Could not parse GELF JSON: " + e.toString() + " - clientMessage was: " + this.clientMessage);
-	                return false;
-	            }
-        	} 
+            // Fills properties with values from JSON.
+            if (this.clientMessage instanceof String) {
+                try { this.parse(); } catch(Exception e) {
+                    LOG.warn("Could not parse GELF JSON: " + e.getMessage() + " - clientMessage was: " + this.clientMessage, e);
+                    return false;
+                }
+            }
         	
             // Add AMQP receiver queue as additional field if set.
             if (this.getAmqpReceiverQueue() != null) {
                 this.message.addAdditionalData("_amqp_queue", this.getAmqpReceiverQueue());
             }
 
+            if (!this.message.convertedFromSyslog()) {
+                LOG.info("Got GELF message: " + this.message.toString());
+            }
 
-            // Log if we are in debug mode.
-            Log.info("Got GELF message: " + this.message.toString());
+            // Blacklisted?
+            if (this.message.blacklisted(Blacklist.fetchAll())) {
+                return true;
+            }
 
             // Insert message into MongoDB.
             ReceiveHookManager.preProcess(new MessageParserHook(), message);
@@ -122,9 +134,14 @@ public class SimpleGELFClientHandler extends GELFClientHandlerBase implements GE
                 // Counts up host in hosts collection.
                 ReceiveHookManager.postProcess(new HostUpsertHook(), message);
             }
+
+            // Forward.
+            int forwardCount = Forwarder.forward(this.message);
+            if (forwardCount > 0) {
+                LOG.info("Forwarded message to " + forwardCount + " endpoints");
+            }
         } catch(Exception e) {
-            Log.warn("Could not handle GELF client: " + e.toString());
-            e.printStackTrace();
+            LOG.warn("Could not handle GELF client: " + e.getMessage(), e);
             return false;
         }
 

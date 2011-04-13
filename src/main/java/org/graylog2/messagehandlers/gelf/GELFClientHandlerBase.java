@@ -20,13 +20,14 @@
 
 package org.graylog2.messagehandlers.gelf;
 
-import java.util.Iterator;
-import java.util.Set;
-import org.graylog2.Log;
-import org.graylog2.Tools;
+import org.apache.log4j.Logger;
+import org.graylog2.messagehandlers.syslog.SyslogEventHandler;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
+
+import java.util.Iterator;
+import java.util.Set;
 
 /**
  * GELFClient.java: Sep 14, 2010 6:43:00 PM
@@ -39,6 +40,9 @@ import org.json.simple.JSONValue;
  * @author: Lennart Koopmann <lennart@socketfeed.com>
  */
 class GELFClientHandlerBase {
+
+    private static final Logger LOG = Logger.getLogger(SyslogEventHandler.class);
+
     protected String clientMessage = null;
     protected GELFMessage message = new GELFMessage();
 
@@ -47,12 +51,11 @@ class GELFClientHandlerBase {
     protected boolean parse() throws Exception{
         JSONObject json = this.getJSON(this.clientMessage.toString());
         if (json == null) {
-            Log.warn("JSON is null/could not be parsed (invalid JSON) - clientMessage was: " + this.clientMessage);
+            LOG.warn("JSON is null/could not be parsed (invalid JSON) - clientMessage was: " + this.clientMessage);
             return false;
         }
 
         // Add standard fields.
-
         this.message.setVersion(this.jsonToString(json.get("version")));
         this.message.setHost(this.jsonToString(json.get("host")));
         this.message.setShortMessage(this.jsonToString(json.get("short_message")));
@@ -89,7 +92,7 @@ class GELFClientHandlerBase {
 
             // Don'T allow to override _id. (just to make sure...)
             if (key.equals("_id")) {
-                Log.warn("Client tried to override _id field! Skipped field, but still storing message.");
+                LOG.warn("Client tried to override _id field! Skipped field, but still storing message.");
                 continue;
             }
 

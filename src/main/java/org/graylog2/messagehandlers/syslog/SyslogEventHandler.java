@@ -20,15 +20,15 @@
 
 package org.graylog2.messagehandlers.syslog;
 
-import java.net.SocketAddress;
-import org.graylog2.Log;
-import org.graylog2.Main;
+import org.apache.log4j.Logger;
 import org.graylog2.Tools;
 import org.graylog2.messagehandlers.gelf.GELFMessage;
 import org.graylog2.messagehandlers.gelf.SimpleGELFClientHandler;
 import org.productivity.java.syslog4j.server.SyslogServerEventIF;
 import org.productivity.java.syslog4j.server.SyslogServerIF;
 import org.productivity.java.syslog4j.server.SyslogServerSessionlessEventHandlerIF;
+
+import java.net.SocketAddress;
 
 /**
  * SyslogEventHandler.java: May 17, 2010 8:58:18 PM
@@ -38,6 +38,8 @@ import org.productivity.java.syslog4j.server.SyslogServerSessionlessEventHandler
  * @author: Lennart Koopmann <lennart@socketfeed.com>
  */
 public class SyslogEventHandler implements SyslogServerSessionlessEventHandlerIF {
+
+    private static final Logger LOG = Logger.getLogger(SyslogEventHandler.class);
     
     /**
      * Handle an incoming syslog message: Output if in debug mode, store in MongoDB, ReceiveHooks
@@ -50,36 +52,34 @@ public class SyslogEventHandler implements SyslogServerSessionlessEventHandlerIF
         GELFMessage gelf = new GELFMessage();
 
         // Print out debug information.
-        if (Main.debugMode) {
-            if (event instanceof GraylogSyslogServerEvent) {
-                GraylogSyslogServerEvent glEvent = (GraylogSyslogServerEvent) event;
-                Log.info("Received syslog message (via AMQP): " + event.getMessage());
-                Log.info("AMQP queue: " + glEvent.getAmqpReceiverQueue());
+        if (event instanceof GraylogSyslogServerEvent) {
+            GraylogSyslogServerEvent glEvent = (GraylogSyslogServerEvent) event;
+            LOG.info("Received syslog message (via AMQP): " + event.getMessage());
+            LOG.info("AMQP queue: " + glEvent.getAmqpReceiverQueue());
 
-                gelf.addAdditionalData("_amqp_queue", glEvent.getAmqpReceiverQueue());
-            } else {
-                Log.info("Received syslog message: " + event.getMessage());
-            }
-            Log.info("Host: " + event.getHost());
-            Log.info("Facility: " + event.getFacility() + " (" + Tools.syslogFacilityToReadable(event.getFacility()) + ")");
-            Log.info("Level: " + event.getLevel() + " (" + Tools.syslogLevelToReadable(event.getLevel()) + ")");
-            Log.info("Raw: " + new String(event.getRaw()));
-            Log.info("=======");
+            gelf.addAdditionalData("_amqp_queue", glEvent.getAmqpReceiverQueue());
+        } else {
+            LOG.info("Received syslog message: " + event.getMessage());
         }
+        LOG.info("Host: " + event.getHost());
+        LOG.info("Facility: " + event.getFacility() + " (" + Tools.syslogFacilityToReadable(event.getFacility()) + ")");
+        LOG.info("Level: " + event.getLevel() + " (" + Tools.syslogLevelToReadable(event.getLevel()) + ")");
+        LOG.info("Raw: " + new String(event.getRaw()));
         
         // Convert SyslogServerEventIF to GELFMessage and pass to SimpleGELFClientHandler
-        gelf.setVersion("1.0");
+        gelf.setConvertedFromSyslog(true);
+        gelf.setVersion("0");
         gelf.setShortMessage(event.getMessage());
         gelf.setHost(event.getHost());
         gelf.setFacility(Tools.syslogFacilityToReadable(event.getFacility()));
         gelf.setLevel(event.getLevel());
-        gelf.setFullMessage(new String(event.getRaw()));
+        gelf.setRaw(event.getRaw());
         
         try {
             SimpleGELFClientHandler gelfHandler = new SimpleGELFClientHandler(gelf);
             gelfHandler.handle();
         } catch ( Exception e ) {
-                // I don't care
+            // I don't care
         }
     }
 

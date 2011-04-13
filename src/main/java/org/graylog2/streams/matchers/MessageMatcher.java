@@ -18,35 +18,23 @@
  *
  */
 
-package org.graylog2.periodical;
+package org.graylog2.streams.matchers;
 
-import org.graylog2.HostSystem;
-import org.graylog2.Log;
+import java.util.regex.Pattern;
+import org.graylog2.messagehandlers.gelf.GELFMessage;
+import org.graylog2.streams.StreamRule;
 
 /**
- * SystemStatisticThread.java: Oct 25, 2010 6:36:05 PM
+ * MessageMatcher.java: Mar 27, 2011 4:50:34 PM
  *
- * Prints out load statistic information every second.
+ * [description]
  *
  * @author: Lennart Koopmann <lennart@socketfeed.com>
  */
-public class ServerValueHistoryWriterThread extends Thread {
+public class MessageMatcher implements StreamRuleMatcherIF {
 
-    /**
-     * Start the thread. Runs forever.
-     */
-    @Override public void run() {
-        // Run forever.
-        while (true) {
-            try {
-                HostSystem.writeSystemHealthHistorically();
-            } catch (Exception e) {
-                Log.warn("Error in SystemValueHistoryWriterThread: " + e.toString());
-            }
-            
-           // Run every 60 seconds.
-           try { Thread.sleep(60000); } catch(InterruptedException e) {}
-        }
+    public boolean match(GELFMessage msg, StreamRule rule) {
+        return Pattern.compile(rule.getValue(), Pattern.DOTALL).matcher(msg.getShortMessage()).matches();
     }
 
 }

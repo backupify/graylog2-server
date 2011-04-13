@@ -20,20 +20,16 @@
 
 package org.graylog2.database;
 
-import com.mongodb.DBCollection;
 import com.mongodb.BasicDBObject;
-import com.mongodb.BasicDBObjectBuilder;
 import com.mongodb.DB;
+import com.mongodb.DBCollection;
+import org.apache.log4j.Logger;
+import org.graylog2.Tools;
+import org.graylog2.messagehandlers.gelf.GELFMessage;
+
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
-import org.graylog2.Log;
-import org.graylog2.Main;
-import org.graylog2.Tools;
-import org.graylog2.messagehandlers.gelf.GELFMessage;
-import org.graylog2.messagehandlers.syslog.GraylogSyslogServerEvent;
-
-import org.productivity.java.syslog4j.server.SyslogServerEventIF;
 
 /**
  * MongoBridge.java: Apr 13, 2010 9:13:03 PM
@@ -44,88 +40,7 @@ import org.productivity.java.syslog4j.server.SyslogServerEventIF;
  */
 public class MongoBridge {
 
-    /**
-     * The standard MongoDB port.
-     */
-    public static final int STANDARD_PORT = 27017;
-
-    /**
-     * Get the messages collection. Lazily creates a new, capped one based on the
-     * messages_collection_size from graylog2.conf if there is none.
-     *
-     * @return The messages collection
-     */
-    public DBCollection getMessagesColl() {
-        DBCollection coll = null;
-
-        // Create a capped collection if the collection does not yet exist.
-        if(MongoConnection.getInstance().getDatabase().collectionExists("messages")) {
-            coll = MongoConnection.getInstance().getDatabase().getCollection("messages");
-        } else {
-            long messagesCollSize = Long.parseLong(Main.masterConfig.getProperty("messages_collection_size").trim());
-            coll = MongoConnection.getInstance()
-                    .getDatabase()
-                    .createCollection("messages", BasicDBObjectBuilder.start()
-                    .add("capped", true)
-                    .add("size", messagesCollSize)
-                    .get());
-        }
-
-        coll.ensureIndex(new BasicDBObject("created_at", 1));
-        coll.ensureIndex(new BasicDBObject("deleted", 1));
-        coll.ensureIndex(new BasicDBObject("host", 1));
-        coll.ensureIndex(new BasicDBObject("facility", 1));
-        coll.ensureIndex(new BasicDBObject("level", 1));
-
-        return coll;
-    }
-
-    public DBCollection getHistoricServerValuesColl() {
-        DBCollection coll = null;
-
-        // Create a capped collection if the collection does not yet exist.
-        if(MongoConnection.getInstance().getDatabase().getCollectionNames().contains("historic_server_values")) {
-            coll = MongoConnection.getInstance().getDatabase().getCollection("historic_server_values");
-        } else {
-            coll = MongoConnection.getInstance()
-                    .getDatabase().createCollection("historic_server_values", BasicDBObjectBuilder.start()
-                    .add("capped", true)
-                    .add("size", 10000000) // 10 MB
-                    .get());
-        }
-
-        coll.ensureIndex(new BasicDBObject("type", 1));
-        coll.ensureIndex(new BasicDBObject("created_at", 1));
-
-        return coll;
-    }
-
-    /**
-     * Inserts a Syslog message into the messages collection.
-     *
-     * @param event The syslog event/message
-     * @throws Exception
-     */
-    public void insert(SyslogServerEventIF event) throws Exception {
-        DBCollection coll = this.getMessagesColl();
-
-        BasicDBObject dbObj = new BasicDBObject();
-        dbObj.put("message", event.getMessage());
-        dbObj.put("host", event.getHost());
-        dbObj.put("facility", event.getFacility());
-        dbObj.put("level", event.getLevel());
-        dbObj.put("created_at", Tools.getUTCTimestamp());
-        // Documents in capped collections cannot grow so we have to do that now and cannot just add 'deleted => true' later.
-        dbObj.put("deleted", false);
-
-        // Add AMQP receiver queue if this is an extended event.
-        if (event instanceof GraylogSyslogServerEvent) {
-            GraylogSyslogServerEvent extendedEvent = (GraylogSyslogServerEvent) event;
-            dbObj.put("_amqp_queue", extendedEvent.getAmqpReceiverQueue());
-        }
-
-        coll.insert(dbObj);
-    }
+    private static final Logger LOG = Logger.getLogger(MongoBridge.class);
 
     /**
      * Inserts a GELF message into the messages collection.
@@ -139,12 +54,16 @@ public class MongoBridge {
             throw new Exception("Missing GELF message parameters. version, short_message and host are required.");
         }
 
-        DBCollection coll = this.getMessagesColl();
+        DBCollection coll = MongoConnection.getInstance().getMessagesColl();
 
         BasicDBObject dbObj = new BasicDBObject();
 
-        dbObj.put("gelf", true);
-        dbObj.put("version", message.getVersion());
+        // Some fields must not be set if this message was converted from a syslog message.
+        if (!message.convertedFromSyslog()) {
+            dbObj.put("gelf", true);
+            dbObj.put("version", message.getVersion());
+        }
+
         dbObj.put("message", message.getShortMessage());
         dbObj.put("full_message", message.getFullMessage());
         dbObj.put("file", message.getFile());
@@ -153,7 +72,7 @@ public class MongoBridge {
         dbObj.put("facility", message.getFacility()); 
         dbObj.put("level", message.getLevel());
         dbObj.put("timestamp", message.getTimestamp());
-
+        
         // Add additional fields. XXX PERFORMANCE
         Map<String,String> additionalFields = message.getAdditionalData();
         Set<String> set = additionalFields.keySet();
@@ -167,6 +86,8 @@ public class MongoBridge {
         dbObj.put("created_at", Tools.getUTCTimestamp());
         // Documents in capped collections cannot grow so we have to do that now and cannot just add 'deleted => true' later.
         dbObj.put("deleted", false);
+
+        dbObj.put("streams", message.getStreamIds());
 
         coll.insert(dbObj);
     }
@@ -187,7 +108,7 @@ public class MongoBridge {
         DB db = MongoConnection.getInstance().getDatabase();
         if (db == null) {
             // Not connected to DB.
-            Log.emerg("MongoBridge::upsertHost(): Could not get hosts collection.");
+            LOG.error("MongoBridge::upsertHost(): Could not get hosts collection.");
         } else {
             db.getCollection("hosts").update(query, update, true, false);
         }
@@ -224,7 +145,7 @@ public class MongoBridge {
         obj.put("value", value);
         obj.put("created_at", Tools.getUTCTimestamp());
 
-        DBCollection coll = getHistoricServerValuesColl();
+        DBCollection coll = MongoConnection.getInstance().getHistoricServerValuesColl();
         coll.insert(obj);
     }
 

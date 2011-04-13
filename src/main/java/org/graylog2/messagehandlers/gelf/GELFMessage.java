@@ -1,5 +1,5 @@
 /**
- * Copyright 2010 Lennart Koopmann <lennart@socketfeed.com>
+ * Copyright 2010, 2011 Lennart Koopmann <lennart@socketfeed.com>
  *
  * This file is part of Graylog2.
  *
@@ -20,8 +20,20 @@
 
 package org.graylog2.messagehandlers.gelf;
 
-import java.util.HashMap;
-import java.util.Map;
+import org.apache.log4j.Logger;
+import org.bson.types.ObjectId;
+import org.graylog2.Tools;
+import org.graylog2.blacklists.Blacklist;
+import org.graylog2.blacklists.BlacklistRule;
+import org.graylog2.streams.Router;
+import org.graylog2.streams.Stream;
+import org.graylog2.streams.StreamRule;
+import org.graylog2.streams.matchers.StreamRuleMatcherIF;
+
+import java.util.*;
+import java.util.zip.Deflater;
+import org.json.simple.JSONObject;
+import org.json.simple.JSONValue;
 
 /**
  * GELFMessage.java: Jul 20, 2010 6:57:28 PM
@@ -31,6 +43,8 @@ import java.util.Map;
  * @author: Lennart Koopmann <lennart@socketfeed.com>
  */
 public class GELFMessage {
+
+    private static final Logger LOG = Logger.getLogger(GELFMessage.class);
 
     private String version = null;
     private String shortMessage = null;
@@ -42,7 +56,17 @@ public class GELFMessage {
     private int timestamp = 0;
     private String facility = null;
     private Map<String, String> additionalData = new HashMap<String, String>();
+    private List<Stream> streams = null;
+    private boolean convertedFromSyslog = false;
+
     private boolean filterOut = false;
+    private boolean doRouting = true;
+    private boolean doBlacklisting = true;
+
+    private Map<Integer, GELFClientChunk> chunks = null;
+    private boolean chunked = false;
+    
+    private byte[] raw;
 
     /**
      * Get the version
@@ -246,6 +270,103 @@ public class GELFMessage {
         return true;
     }
 
+
+    public void setStreams(List<Stream> streams) {
+        this.streams = streams;
+    }
+
+    public List<Stream> getStreams() {
+        if (this.streams != null) {
+            return this.streams;
+        }
+
+        return Router.route(this);
+    }
+
+    public List<ObjectId> getStreamIds() {
+        ArrayList<ObjectId> ids = new ArrayList<ObjectId>();
+
+        for (Stream stream : this.getStreams()) {
+            ids.add(stream.getId());
+        }
+
+        return ids;
+    }
+
+    public boolean matchStreamRule(StreamRuleMatcherIF matcher, StreamRule rule) {
+        if (!this.doRouting) {
+            return false;
+        }
+        
+        try {
+            return matcher.match(this, rule);
+        } catch (Exception e) {
+            LOG.warn("Could not match stream rule <" + rule.getRuleType() + "/" + rule.getValue() + ">: " + e.getMessage(), e);
+            return false;
+        }
+    }
+
+    public boolean blacklisted(List<Blacklist> blacklists) {
+        if (!this.doBlacklisting) {
+            return false;
+        }
+
+        for (Blacklist blacklist : blacklists) {
+            for (BlacklistRule rule : blacklist.getRules()) {
+                if (this.getShortMessage().matches(rule.getTerm())) {
+                    LOG.info("Message <" + this.toString() + "> is blacklisted. First match on " + rule.getTerm());
+                    return true;
+                }
+            }
+        }
+
+        // No rule hit.
+        return false;
+    }
+
+    public void setConvertedFromSyslog(boolean x) {
+        this.convertedFromSyslog = x;
+    }
+
+    public boolean convertedFromSyslog() {
+        return this.convertedFromSyslog;
+    }
+
+    /**
+     * Converts message to a String consisting of the host and the short message
+     * separated by a dash. Optimized for later full text searching.
+     *
+     * @return boolean
+     */
+    public String toOneLiner() {
+        String msg = this.getHost() + " - " + this.getShortMessage();
+
+        msg += " severity=" + Tools.syslogLevelToReadable(this.getLevel());
+        msg += ",facility=" + this.getFacility();
+
+        if (this.getFile() != null) {
+            msg += ",file=" + this.getFile();
+        }
+
+        if (this.getLine() != 0) {
+            msg += ",line=" + this.getLine();
+        }
+
+        if (this.getAdditionalData().size() > 0) {
+            // Add additional fields. XXX PERFORMANCE
+            Map<String,String> additionalFields = this.getAdditionalData();
+            Set<String> set = additionalFields.keySet();
+            Iterator<String> iter = set.iterator();
+            while(iter.hasNext()) {
+                String key = iter.next();
+                String value = additionalFields.get(key);
+                msg += "," + key + "=" + value;
+            }
+        }
+
+        return msg;
+    }
+
     /**
      * @return Human readable, descriptive and formatted string of this GELF message.
      */
@@ -270,6 +391,63 @@ public class GELFMessage {
         }
 
         return ret;
+    }
+
+    public void disableRouting() {
+        this.doRouting = false;
+    }
+
+    public void disableBlacklisting() {
+        this.doBlacklisting = false;
+    }
+
+    public void storeMessageChunks(Map<Integer, GELFClientChunk> chunks) {
+        this.chunks = chunks;
+    }
+
+    public Map<Integer, GELFClientChunk> getMessageChunks() {
+        return this.chunks;
+    }
+
+    public void setIsChunked(boolean b) {
+        this.chunked = true;
+    }
+
+    public boolean isChunked() {
+        return this.chunked;
+    }
+
+    public byte[] getRaw() {
+        return this.raw;
+    }
+
+    public void setRaw(byte[] raw) {
+        this.raw = raw;
+    }
+
+    public byte[] compress() {
+        byte[] compressMe = this.toJson().getBytes();
+        byte[] compressedMessage = new byte[compressMe.length];
+        Deflater compressor = new Deflater();
+        compressor.setInput(compressMe);
+        compressor.finish();
+        compressor.deflate(compressedMessage);
+
+        return compressedMessage;
+    }
+
+    private String toJson() {
+        LinkedHashMap<String, Object> obj = new LinkedHashMap<String, Object>();
+        obj.put("short_message", this.getShortMessage());
+        obj.put("full_message", this.getFullMessage());
+        obj.put("host", this.getHost());
+        obj.put("facility", this.getFacility());
+        obj.put("level", this.getLevel());
+        obj.put("file", this.getFile());
+        obj.put("line", this.getLine());
+        obj.put("version", this.getVersion());
+
+        return JSONValue.toJSONString(obj);
     }
 
 }

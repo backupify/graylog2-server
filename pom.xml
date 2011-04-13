@@ -6,7 +6,7 @@
 
     <groupId>org.graylog2</groupId>
     <artifactId>graylog2-server</artifactId>
-    <version>0.9.5-SNAPSHOT</version>
+    <version>0.9.5p1</version>
     <packaging>jar</packaging>
 
     <properties>
@@ -81,21 +81,26 @@
             <artifactId>amqp-client</artifactId>
             <version>2.2.0</version>
         </dependency>
-		<dependency> 
-		    <groupId>org.drools</groupId> 
-		    <artifactId>drools-core</artifactId> 
-		    <version>5.0.1</version> 
-		</dependency>
-		<dependency> 
-		    <groupId>org.drools</groupId> 
-		    <artifactId>drools-compiler</artifactId> 
-		    <version>5.0.1</version> 
-		</dependency>
-		<dependency> 
-		    <groupId>org.drools</groupId> 
-		    <artifactId>drools-api</artifactId> 
-		    <version>5.0.1</version> 
-		</dependency>
+        <dependency> 
+            <groupId>org.drools</groupId> 
+            <artifactId>drools-core</artifactId> 
+            <version>5.0.1</version> 
+        </dependency>
+        <dependency> 
+            <groupId>org.drools</groupId> 
+            <artifactId>drools-compiler</artifactId> 
+            <version>5.0.1</version> 
+        </dependency>
+        <dependency> 
+            <groupId>org.drools</groupId> 
+            <artifactId>drools-api</artifactId> 
+            <version>5.0.1</version> 
+        </dependency>
+        <dependency>
+            <groupId>log4j</groupId>
+            <artifactId>log4j</artifactId>
+            <version>1.2.16</version>
+        </dependency>
     </dependencies>
 
     <build>
@@ -173,6 +178,14 @@
                 </executions>
             </plugin>
         </plugins>
+        <testResources>
+            <testResource>
+                <directory>src/main/resources</directory>
+                <includes>
+                    <include>log4j.xml</include>
+                </includes>
+            </testResource>
+        </testResources>
     </build>
     <name>graylog2-server</name>
     <description>http://www.graylog2.org/</description>
